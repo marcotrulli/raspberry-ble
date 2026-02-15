@@ -54,7 +54,7 @@ async def main():
     # Connessione al BLE
     print(f"🔌 Connessione al dispositivo BLE {MAC_ADDRESS}...")
     async with BleakClient(MAC_ADDRESS) as client:
-        if await client.is_connected():
+        if client.is_connected:
             print("✅ Connesso al BLE!")
         else:
             print("❌ Connessione fallita!")
