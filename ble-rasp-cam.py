@@ -23,7 +23,7 @@ async def timer_check():
     if valore_corrente <= SOGLIA:
         try:
             url = f"http://{CAM_IP}/capture"
-            r = requests.get(url, timeout=5)
+            r = requests.get(url, timeout=15)
             if r.status_code == 200:
                 print("📸 Foto scattata!")
                 with open("ultima_foto.jpg", "wb") as f:
