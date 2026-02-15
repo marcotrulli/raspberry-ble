@@ -1,95 +1,95 @@
-import subprocess
 import asyncio
+import subprocess
 import requests
-from bleak import BleakClient
-from threading import Timer
+from datetime import datetime
 
-# ---------- CONFIG ----------
-MAC_ADDRESS = "48:87:2D:6C:FB:0C"
-BLE_CHAR = "0000ffe1-0000-1000-8000-00805f9b34fb"
-CAM_IP = "192.168.1.36"
-SOGLIA = 40.0
-TIMER_DELAY = 2  # secondi
+# ---------- CONFIGURAZIONE ----------
+BLE_READ_PATH = "/home/pi/raspberry-ble/raspberry-ble/ble_read.py"  # percorso assoluto
+CAM_IP = "192.168.1.36"  # IP della ESP32-CAM
+SOGLIA = 40.0  # distanza soglia
+TIMER_SCATTO = 2  # secondi prima dello scatto foto
 
-timer_attivo = False
+# Flag per evitare scatti multipli
+scatto_in_corso = False
 
-# ---------- FUNZIONI CAM ----------
+# ---------- AVVIO BLE_READ IN NUOVO TERMINALE ----------
+def avvia_ble_read():
+    print("🚀 Avvio ble_read.py in nuovo terminale...")
+    subprocess.Popen([
+        "lxterminal",
+        "--hold",
+        "-e",
+        f"python3 {BLE_READ_PATH}"
+    ])
+
+# ---------- FUNZIONE PER SCATTARE FOTO ----------
 def scatta_foto():
-    """Invia richiesta /capture alla cam e salva foto."""
     try:
-        r = requests.get(f"http://{CAM_IP}/capture", timeout=10)
+        url = f"http://{CAM_IP}/capture"
+        r = requests.get(url, timeout=10)
         if r.status_code == 200:
-            with open("ultima_foto.jpg", "wb") as f:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"foto_{timestamp}.jpg"
+            with open(filename, "wb") as f:
                 f.write(r.content)
-            print("🎉 Foto scattata!")
+            print(f"📸 Foto scattata e salvata come {filename}")
         else:
-            print("Errore HTTP cam:", r.status_code)
+            print("Errore HTTP dalla cam:", r.status_code)
     except requests.exceptions.RequestException as e:
         print("Errore richiesta ESP32:", e)
 
-def mostra_ultima_foto():
-    """Richiama /last per mostrare ultima foto."""
-    try:
-        r = requests.get(f"http://{CAM_IP}/last", timeout=10)
-        if r.status_code == 200:
-            with open("ultima_foto_last.jpg", "wb") as f:
-                f.write(r.content)
-            print("🖼️ Ultima foto aggiornata")
-        else:
-            print("Errore HTTP /last:", r.status_code)
-    except requests.exceptions.RequestException as e:
-        print("Errore richiesta /last:", e)
+# ---------- LETTURA DATI BLE DAL FILE BLE_READ ----------
+async def leggi_distanze_ble():
+    # Usa subprocess per leggere in tempo reale l'output di ble_read.py
+    proc = await asyncio.create_subprocess_exec(
+        "python3", BLE_READ_PATH,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    return proc
 
-# ---------- TIMER ----------
-def start_timer():
-    global timer_attivo
-    if not timer_attivo:
-        timer_attivo = True
-        t = Timer(TIMER_DELAY, timer_callback)
-        t.start()
-        print(f"⚠️ Soglia raggiunta, timer {TIMER_DELAY}s avviato...")
-
-def timer_callback():
-    global timer_attivo
-    scatta_foto()
-    timer_attivo = False
-
-# ---------- BLE ----------
-async def leggi_distanza_ble(client):
-    """Legge il valore BLE e ritorna distanza float."""
-    try:
-        data = await client.read_gatt_char(BLE_CHAR)
-        value_str = data.decode().strip()
-        distanza = float(value_str)
-        return distanza
-    except Exception:
-        return None
-
-# ---------- MAIN ----------
+# ---------- FUNZIONE PRINCIPALE ----------
 async def main():
-    # Avvio ble_read.py in nuovo terminale
-    print("🚀 Avvio ble_read.py in nuovo terminale...")
-    subprocess.Popen(["lxterminal", "-e", "python3 ble_read.py"])
+    global scatto_in_corso
+    # Avvia il terminale separato con ble_read.py
+    avvia_ble_read()
 
-    print(f"🔌 Connessione al dispositivo BLE {MAC_ADDRESS}...")
-    async with BleakClient(MAC_ADDRESS) as client:
-        if not client.is_connected:
-            print("❌ Connessione BLE fallita!")
-            return
-        print("✅ Connesso al BLE!")
-        print("🎯 In ascolto dei valori BLE...")
+    print("🔔 In ascolto dei valori BLE...")
 
-        while True:
-            distanza = await leggi_distanza_ble(client)
-            if distanza is not None:
+    # Crea processo BLE in pipe
+    proc = await leggi_distanze_ble()
+    
+    while True:
+        try:
+            # legge una riga dall'output BLE
+            line = await proc.stdout.readline()
+            if not line:
+                await asyncio.sleep(0.1)
+                continue
+            line_str = line.decode().strip()
+            
+            # Conversione in float
+            try:
+                distanza = float(line_str)
                 print(f"Distanza letta: {distanza}")
-                if distanza < SOGLIA:
-                    start_timer()
-            await asyncio.sleep(0.5)
 
-# ---------- AVVIO ----------
+                if distanza < SOGLIA and not scatto_in_corso:
+                    print(f"⚠️ Soglia {SOGLIA} raggiunta, timer di {TIMER_SCATTO}s avviato...")
+                    scatto_in_corso = True
+                    await asyncio.sleep(TIMER_SCATTO)
+                    scatta_foto()
+                    scatto_in_corso = False
+
+            except ValueError:
+                print(f"Dato non valido ricevuto dal BLE: {line_str}")
+
+        except asyncio.CancelledError:
+            print("Script principale interrotto")
+            break
+
+# ---------- AVVIO SCRIPT ----------
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nScript CAM interrotto")
+        print("Script interrotto dall'utente")
