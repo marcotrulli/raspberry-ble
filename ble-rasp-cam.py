@@ -33,7 +33,7 @@ async def invia_comando_camera():
     global timer_attivo
     await asyncio.sleep(TIMER)
     try:
-        response = requests.get(f"http://{CAMERA_IP}/capture", timeout=5)
+        response = requests.get(f"http://{CAMERA_IP}/capture", timeout=15)
         if response.status_code == 200:
             print("📸 Foto scattata con successo!")
         else:
