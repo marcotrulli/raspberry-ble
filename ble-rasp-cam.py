@@ -1,95 +1,91 @@
+#!/usr/bin/env python3
 import asyncio
 import subprocess
 import requests
-from datetime import datetime
+import time
 
-# ---------- CONFIGURAZIONE ----------
-BLE_READ_PATH = "/home/pi/raspberry-ble/raspberry-ble/ble_read.py"  # percorso assoluto
-CAM_IP = "192.168.1.36"  # IP della ESP32-CAM
-SOGLIA = 40.0  # distanza soglia
-TIMER_SCATTO = 2  # secondi prima dello scatto foto
+# Percorso del file ble_read.py
+BLE_READ_PATH = "/home/pi/raspberry-ble/raspberry-ble/ble_read.py"
 
-# Flag per evitare scatti multipli
+# IP della ESP32-CAM
+CAM_IP = "192.168.1.36"
+
+# Soglia distanza
+SOGLIA = 40.0
+
+# Timer per scatto (in secondi)
+TIMER_SCATTO = 2.0
+
+# Flag per evitare scatti continui
 scatto_in_corso = False
 
-# ---------- AVVIO BLE_READ IN NUOVO TERMINALE ----------
-def avvia_ble_read():
-    print("🚀 Avvio ble_read.py in nuovo terminale...")
-    subprocess.Popen([
-        "lxterminal",
-        "--hold",
-        "-e",
-        f"python3 {BLE_READ_PATH}"
-    ])
+# Avvio ble_read.py in un nuovo terminale separato
+print("🚀 Avvio ble_read.py in nuovo terminale...")
+subprocess.Popen([
+    "lxterminal",
+    "--command",
+    f"bash -c 'python3 {BLE_READ_PATH}; exec bash'"
+])
 
-# ---------- FUNZIONE PER SCATTARE FOTO ----------
-def scatta_foto():
-    try:
-        url = f"http://{CAM_IP}/capture"
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"foto_{timestamp}.jpg"
-            with open(filename, "wb") as f:
-                f.write(r.content)
-            print(f"📸 Foto scattata e salvata come {filename}")
-        else:
-            print("Errore HTTP dalla cam:", r.status_code)
-    except requests.exceptions.RequestException as e:
-        print("Errore richiesta ESP32:", e)
+print("🎬 In ascolto dei valori BLE...")
 
-# ---------- LETTURA DATI BLE DAL FILE BLE_READ ----------
-async def leggi_distanze_ble():
-    # Usa subprocess per leggere in tempo reale l'output di ble_read.py
-    proc = await asyncio.create_subprocess_exec(
+async def leggi_ble_stream():
+    global scatto_in_corso
+
+    # Avvia ble_read.py come processo figlio e cattura stdout
+    process = await asyncio.create_subprocess_exec(
         "python3", BLE_READ_PATH,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
     )
-    return proc
 
-# ---------- FUNZIONE PRINCIPALE ----------
-async def main():
-    global scatto_in_corso
-    # Avvia il terminale separato con ble_read.py
-    avvia_ble_read()
-
-    print("🔔 In ascolto dei valori BLE...")
-
-    # Crea processo BLE in pipe
-    proc = await leggi_distanze_ble()
-    
     while True:
         try:
-            # legge una riga dall'output BLE
-            line = await proc.stdout.readline()
-            if not line:
+            # Legge una riga alla volta dallo stdout
+            riga = await process.stdout.readline()
+            if not riga:
                 await asyncio.sleep(0.1)
                 continue
-            line_str = line.decode().strip()
-            
-            # Conversione in float
+
+            riga = riga.decode().strip()
+            if not riga:
+                continue
+
             try:
-                distanza = float(line_str)
+                distanza = float(riga)
                 print(f"Distanza letta: {distanza}")
 
-                if distanza < SOGLIA and not scatto_in_corso:
-                    print(f"⚠️ Soglia {SOGLIA} raggiunta, timer di {TIMER_SCATTO}s avviato...")
-                    scatto_in_corso = True
-                    await asyncio.sleep(TIMER_SCATTO)
-                    scatta_foto()
+                if distanza < SOGLIA:
+                    if not scatto_in_corso:
+                        scatto_in_corso = True
+                        print(f"⚠️ Soglia {SOGLIA} raggiunta, timer di {TIMER_SCATTO}s avviato...")
+                        await asyncio.sleep(TIMER_SCATTO)
+                        # Invio richiesta alla CAM
+                        try:
+                            url = f"http://{CAM_IP}/capture"
+                            r = requests.get(url, timeout=10)
+                            if r.status_code == 200:
+                                with open("ultima_foto.jpg", "wb") as f:
+                                    f.write(r.content)
+                                print("📸 Foto scattata!")
+                            else:
+                                print("Errore HTTP:", r.status_code)
+                        except requests.exceptions.RequestException as e:
+                            print("Errore richiesta ESP32-CAM:", e)
+                        scatto_in_corso = False
+                else:
                     scatto_in_corso = False
 
             except ValueError:
-                print(f"Dato non valido ricevuto dal BLE: {line_str}")
+                print(f"Dato non valido da BLE: {riga}")
 
-        except asyncio.CancelledError:
-            print("Script principale interrotto")
+        except KeyboardInterrupt:
+            print("🛑 Script principale interrotto")
+            process.terminate()
             break
 
-# ---------- AVVIO SCRIPT ----------
+async def main():
+    await leggi_ble_stream()
+
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Script interrotto dall'utente")
+    asyncio.run(main())
