@@ -1,17 +1,20 @@
 import asyncio
 import requests
 from bleak import BleakClient
+import subprocess
+import os
+import sys
 
 # ---------- CONFIGURAZIONE ----------
-MAC_ADDRESS = "48:87:2D:6C:FB:0C"      # MAC del tuo dispositivo BLE
+MAC_ADDRESS = "48:87:2D:6C:FB:0C"
 CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
-ESP32_CAM_IP = "192.168.1.36"          # IP della ESP32-CAM
-SOGLIA = 40                             # soglia per scattare la foto
-DELAY = 2                               # ritardo in secondi prima dello scatto
+ESP32_CAM_IP = "192.168.1.36"
+SOGLIA = 40
+DELAY = 2
 
 # ---------- VARIABILI GLOBALI ----------
-foto_scattata = False        # True se abbiamo già scattato fino al prossimo reset
-timer_attivo = False         # True se il timer dei 2 secondi è già partito
+foto_scattata = False
+timer_attivo = False
 valore_corrente = None
 
 # ---------- FUNZIONE CHE SCATTA FOTO ----------
@@ -22,7 +25,7 @@ def scatta_foto():
         r = requests.get(url, timeout=5)
         if r.status_code == 200:
             print("✅ Foto scattata sulla cam!")
-            foto_scattata = True   # blocca ulteriori scatti fino a reset
+            foto_scattata = True
         else:
             print("❌ Errore HTTP:", r.status_code)
     except Exception as e:
@@ -32,10 +35,9 @@ def scatta_foto():
 async def timer_check():
     global timer_attivo, valore_corrente
     await asyncio.sleep(DELAY)
-    # Dopo 2 secondi controlla ancora la soglia
     if valore_corrente is not None and valore_corrente <= SOGLIA:
         scatta_foto()
-    timer_attivo = False  # timer finito
+    timer_attivo = False
 
 # ---------- CALLBACK BLE ----------
 def handle_data(sender, data):
@@ -46,22 +48,33 @@ def handle_data(sender, data):
         print(f"Distanza letta: {valore}")
 
         if valore <= SOGLIA:
-            # Se non abbiamo già scattato e non c'è un timer attivo, partiamo il timer
             if not foto_scattata and not timer_attivo:
                 print(f"⚡ Soglia {SOGLIA} raggiunta, timer di {DELAY}s avviato...")
                 timer_attivo = True
                 asyncio.create_task(timer_check())
         else:
-            # Se il valore torna sopra soglia, resetta lo scatto
-            if foto_scattata:
-                print("🔄 Valore sopra soglia, reset scatto")
             foto_scattata = False
     except Exception as e:
         print("Dato ricevuto non valido:", data, e)
 
+# ---------- AVVIO AUTOMATICO BLE_READ.PY IN UN NUOVO TERMINALE ----------
+def avvia_ble_read():
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ble_read.py")
+    print(f"Avvio {script_path} in un nuovo terminale...")
+
+    # Usa lxterminal (Raspberry Pi Desktop)
+    subprocess.Popen(["lxterminal", "-e", f"python3 {script_path}"])
+    # Se hai gnome-terminal, puoi usare:
+    # subprocess.Popen(["gnome-terminal", "--", "python3", script_path])
+    # Se vuoi xterm:
+    # subprocess.Popen(["xterm", "-e", f"python3 {script_path}"])
+
 # ---------- MAIN LOOP ASINCRONO ----------
 async def main():
-    print("Connessione in corso al dispositivo BLE...")
+    # Avvia ble_read.py in un nuovo terminale
+    avvia_ble_read()
+
+    print("Connessione in corso al dispositivo BLE dal codice principale...")
     async with BleakClient(MAC_ADDRESS) as client:
         print("Connesso al BLE!")
         await client.start_notify(CHAR_UUID, handle_data)
