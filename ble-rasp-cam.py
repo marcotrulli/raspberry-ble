@@ -1,77 +1,74 @@
 import asyncio
 import subprocess
 import requests
+import time
 from bleak import BleakClient
 
-# ---------------- CONFIGURAZIONE ----------------
-MAC_ADDRESS = "48:87:2D:6C:FB:0C"  # MAC BLE reale
-SOGLIA = 40.0
-TIMER = 2  # secondi
-ESP32_IP = "192.168.1.36"  # IP reale ESP32-CAM
+# ---------- CONFIG BLE ----------
+MAC_ADDRESS = "48:87:2D:6C:FB:0C"
+CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
+SOG_LIA = 40.0  # soglia distanza
+CAMERA_IP = "192.168.1.XXX"  # sostituisci con IP reale ESP32-CAM
 
-# Stato del timer per evitare scatti multipli
+# ---------- VARIABILI GLOBALI ----------
 timer_attivo = False
 
-# ---------------- AVVIO BLE_READ IN NUOVO TERMINALE ----------------
-print("🚀 Avvio ble_read.py in nuovo terminale...")
-
-# Percorso assoluto al Python del venv
-PYTHON_VENV = "/home/pi/raspberry-ble/raspberry-ble/venv/bin/python"
-
-subprocess.Popen([
-    "lxterminal",
-    "--command",
-    f"{PYTHON_VENV} /home/pi/raspberry-ble/raspberry-ble/ble_read.py; exec bash"
-])
-
-# ---------------- FUNZIONE PER INVIO FOTO ----------------
-async def invia_foto():
-    global timer_attivo
-    try:
-        print(f"📸 Timer di {TIMER}s avviato...")
-        await asyncio.sleep(TIMER)
-        print("🎯 Inviando comando /capture alla CAM...")
-        url = f"http://{ESP32_IP}/capture"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            print("✅ Foto scattata con successo!")
-        else:
-            print(f"⚠️ Errore HTTP: {response.status_code}")
-    except requests.RequestException as e:
-        print(f"⚠️ Errore connessione ESP32: {e}")
-    finally:
-        timer_attivo = False  # Reset timer
-
-# ---------------- FUNZIONE DI CALLBACK BLE ----------------
+# ---------- FUNZIONE NOTIFICA BLE ----------
 def notification_handler(sender, data):
     global timer_attivo
     try:
         distanza = float(data.decode().strip())
         print(f"Distanza letta: {distanza}")
-        if distanza < SOGLIA and not timer_attivo:
-            timer_attivo = True
-            asyncio.create_task(invia_foto())
-    except ValueError:
-        print(f"Dato ricevuto non valido: {data}")
+    except Exception as e:
+        print(f"Dato ricevuto non valido: {data} {e}")
+        return
 
-# ---------------- LOOP PRINCIPALE ----------------
+    if distanza < SOG_LIA and not timer_attivo:
+        print(f"⚠️ Soglia {SOG_LIA} raggiunta, timer di 2s avviato...")
+        timer_attivo = True
+        asyncio.create_task(invia_comando_camera())
+
+# ---------- FUNZIONE PER INVIARE COMANDO ALLA CAMERA ----------
+async def invia_comando_camera():
+    global timer_attivo
+    await asyncio.sleep(2)  # timer 2 secondi
+    try:
+        r = requests.get(f"http://{CAMERA_IP}/capture", timeout=5)
+        if r.status_code == 200:
+            print("📸 Foto scattata con successo!")
+        else:
+            print(f"Errore HTTP: {r.status_code}")
+    except Exception as e:
+        print(f"Errore richiesta camera: {e}")
+    timer_attivo = False
+
+# ---------- MAIN ASYNC ----------
 async def main():
-    print(f"🔎 Connessione al dispositivo BLE {MAC_ADDRESS}...")
+    # Avvio ble_read.py in nuovo terminale con venv
+    print("🚀 Avvio ble_read.py in nuovo terminale...")
+    subprocess.Popen([
+        "lxterminal", "-e",
+        f"bash -c 'source {subprocess.os.getcwd()}/venv/bin/activate; python3 ble_read.py; exec bash'"
+    ])
+
+    print(f"🔌 Connessione al dispositivo BLE {MAC_ADDRESS}...")
     async with BleakClient(MAC_ADDRESS) as client:
-        print("✔️ Connesso al BLE!")
-        # Handle BLE reale dal tuo dispositivo (assicurati sia corretto)
-        HANDLE = 0x0025  
-        await client.start_notify(HANDLE, notification_handler)
-        print("🎯 In ascolto dei valori BLE...")
+        if await client.is_connected():
+            print("✅ Connesso al BLE!")
+        else:
+            print("❌ Connessione fallita!")
+            return
+
+        print("🎧 In ascolto dei valori BLE...")
+        await client.start_notify(CHAR_UUID, notification_handler)
+
         try:
             while True:
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
-            await client.stop_notify(HANDLE)
-            print("⛔ Interrotto")
+            print("Script principale interrotto")
+            await client.stop_notify(CHAR_UUID)
 
+# ---------- AVVIO ----------
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("🛑 Script principale interrotto")
+    asyncio.run(main())
