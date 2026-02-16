@@ -24,7 +24,6 @@ lcd.write_string(f"IP: {CAMERA_IP}")
 timer_attivo = False
 ultima_distanza = None
 
-# Funzione helper per aggiornare LCD in modo sicuro
 async def lcd_update(line1, line2=None):
     lcd.cursor_pos = (0, 0)
     lcd.write_string(" " * LCD_COLS)
@@ -62,12 +61,8 @@ def notification_handler(sender, data):
     global timer_attivo, ultima_distanza
     try:
         distanza = float(data.decode().strip())
-
-        # Aggiorna LCD in modo thread-safe
-        asyncio.run_coroutine_threadsafe(
-            lcd_update(f"Distanza: {distanza:.1f}cm", f"IP: {CAMERA_IP}"),
-            asyncio.get_event_loop()
-        )
+        # Aggiorna LCD usando create_task
+        asyncio.create_task(lcd_update(f"Distanza: {distanza:.1f}cm", f"IP: {CAMERA_IP}"))
 
         if ultima_distanza is not None and not timer_attivo:
             if ultima_distanza > SOGLIA_DISTANZA and distanza < SOGLIA_DISTANZA:
