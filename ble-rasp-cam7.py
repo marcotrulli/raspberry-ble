@@ -2,16 +2,13 @@ import asyncio
 import httpx
 from bleak import BleakClient
 from RPLCD.i2c import CharLCD
-import time
 
-# ---------- CONFIGURAZIONE ----------
+# ---------- CONFIG ----------
 MAC_ADDRESS = "48:87:2D:6C:FB:0C"
 CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
 SOGLIA_DISTANZA = 40.0
 CAMERA_IP = "192.168.1.36"
-TIMER_SCATTO = 0.5
 
-# ---------- CONFIGURAZIONE LCD I2C ----------
 I2C_ADDR = 0x27
 LCD_COLS = 16
 LCD_ROWS = 2
@@ -25,7 +22,9 @@ timer_attivo = False
 ultima_distanza = None
 numero_scatti = 0
 
-# Funzione per aggiornare il LCD in modo sincrono
+# Coda per comunicazione BLE -> display
+distanza_queue = asyncio.Queue()
+
 def lcd_update_sync(line1, line2=None):
     lcd.cursor_pos = (0, 0)
     lcd.write_string(" " * LCD_COLS)
@@ -37,26 +36,26 @@ def lcd_update_sync(line1, line2=None):
         lcd.cursor_pos = (1, 0)
         lcd.write_string(line2[:LCD_COLS])
 
+async def lcd_task():
+    while True:
+        distanza = await distanza_queue.get()
+        lcd_update_sync(f"Distanza: {distanza:.1f}cm", f"IP: {CAMERA_IP}")
+        distanza_queue.task_done()
+
 async def invia_comando_camera():
     global timer_attivo, numero_scatti
     numero_scatti += 1
-    print(f"📸 TRIGGER! Scatto in corso... Totali: {numero_scatti}")
-    lcd_update_sync(f"Trigger! Foto...", f"IP: {CAMERA_IP}")
-
+    lcd_update_sync("Trigger! Foto...", f"IP: {CAMERA_IP}")
     url = f"http://{CAMERA_IP}/capture"
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=10.0)
-            if response.status_code == 200:
-                print("✅ Foto aggiornata!")
+            resp = await client.get(url, timeout=10)
+            if resp.status_code == 200:
                 lcd_update_sync(f"Foto OK! Nr:{numero_scatti}", f"IP: {CAMERA_IP}")
             else:
-                print(f"⚠️ Problema ESP: {response.status_code}")
                 lcd_update_sync("Errore ESP", f"IP: {CAMERA_IP}")
-    except Exception as e:
-        print(f"❌ Errore rete: {e}")
+    except:
         lcd_update_sync("Errore rete", f"IP: {CAMERA_IP}")
-
     await asyncio.sleep(3)
     timer_attivo = False
 
@@ -64,8 +63,8 @@ def notification_handler(sender, data):
     global timer_attivo, ultima_distanza
     try:
         distanza = float(data.decode().strip())
-        # Aggiornamento LCD in tempo reale (sincrono)
-        lcd_update_sync(f"Distanza: {distanza:.1f}cm", f"IP: {CAMERA_IP}")
+        # Metti nella coda, il task LCD lo aggiorna
+        asyncio.create_task(distanza_queue.put(distanza))
 
         if ultima_distanza is not None and not timer_attivo:
             if ultima_distanza > SOGLIA_DISTANZA and distanza < SOGLIA_DISTANZA:
@@ -78,16 +77,15 @@ def notification_handler(sender, data):
 async def run_ble_loop():
     while True:
         try:
-            print(f"🔍 Connessione a {MAC_ADDRESS}...")
             lcd_update_sync("Connetto BLE...", f"IP: {CAMERA_IP}")
             async with BleakClient(MAC_ADDRESS) as client:
-                print("✅ Sensore pronto.")
                 lcd_update_sync("Sensore pronto!", f"IP: {CAMERA_IP}")
                 await client.start_notify(CHAR_UUID, notification_handler)
+                # Task LCD in parallelo
+                lcd_worker = asyncio.create_task(lcd_task())
                 while True:
                     await asyncio.sleep(1)
         except Exception as e:
-            print(f"💥 Errore BLE: {e}")
             lcd_update_sync("Errore BLE!", f"IP: {CAMERA_IP}")
             await asyncio.sleep(5)
 
