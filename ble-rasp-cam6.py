@@ -4,7 +4,7 @@ from bleak import BleakClient
 from RPLCD.i2c import CharLCD
 import time
 
-# ---------- CONFIGURAZIONE ---------- 
+# ---------- CONFIGURAZIONE ----------
 MAC_ADDRESS = "48:87:2D:6C:FB:0C"
 CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
 SOGLIA_DISTANZA = 40.0
@@ -24,6 +24,7 @@ lcd.write_string(f"IP: {CAMERA_IP}")
 timer_attivo = False
 ultima_distanza = None
 
+# Funzione helper per LCD
 async def lcd_update(line1, line2=None):
     lcd.cursor_pos = (0, 0)
     lcd.write_string(" " * LCD_COLS)
@@ -61,7 +62,6 @@ def notification_handler(sender, data):
     global timer_attivo, ultima_distanza
     try:
         distanza = float(data.decode().strip())
-        # Aggiorna LCD usando create_task
         asyncio.create_task(lcd_update(f"Distanza: {distanza:.1f}cm", f"IP: {CAMERA_IP}"))
 
         if ultima_distanza is not None and not timer_attivo:
@@ -72,17 +72,25 @@ def notification_handler(sender, data):
     except:
         pass
 
-async def main():
-    print(f"🔍 Connessione a {MAC_ADDRESS}...")
-    await lcd_update("Connetto BLE...", f"IP: {CAMERA_IP}")
-    try:
-        async with BleakClient(MAC_ADDRESS) as client:
-            print("✅ Sensore Pronto.")
-            await lcd_update("Sensore pronto!", f"IP: {CAMERA_IP}")
-            await client.start_notify(CHAR_UUID, notification_handler)
-            while True:
-                await asyncio.sleep(1)
-    except Exception as e:
-        print(f"💥 Errore: {e}")
-        await lcd_update("Errore BLE!", f"IP: {CAMERA_IP}")
-        time.sleep(2)
+async def run_ble_loop():
+    while True:
+        try:
+            print(f"🔍 Connessione a {MAC_ADDRESS}...")
+            await lcd_update("Connetto BLE...", f"IP: {CAMERA_IP}")
+            async with BleakClient(MAC_ADDRESS) as client:
+                print("✅ Sensore Pronto.")
+                await lcd_update("Sensore pronto!", f"IP: {CAMERA_IP}")
+                await client.start_notify(CHAR_UUID, notification_handler)
+                while True:
+                    await asyncio.sleep(1)
+        except Exception as e:
+            print(f"💥 Errore BLE: {e}")
+            await lcd_update("Errore BLE!", f"IP: {CAMERA_IP}")
+            await asyncio.sleep(5)  # Riprova la connessione
+
+# ---------- Avvio manuale loop ----------
+loop = asyncio.get_event_loop()
+try:
+    loop.run_until_complete(run_ble_loop())
+finally:
+    loop.close()
