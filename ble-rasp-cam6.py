@@ -16,19 +16,30 @@ I2C_ADDR = 0x27
 LCD_COLS = 16
 LCD_ROWS = 2
 lcd = CharLCD('PCF8574', I2C_ADDR, cols=LCD_COLS, rows=LCD_ROWS)
-lcd.clear()
 lcd.write_string("Inizializzazione")
+lcd.cursor_pos = (1, 0)
+lcd.write_string(f"IP: {CAMERA_IP}")
 
 # ---------- STATO ----------
 timer_attivo = False
 ultima_distanza = None
 
+# Funzione helper per aggiornare LCD in modo sicuro
+async def lcd_update(line1, line2=None):
+    lcd.cursor_pos = (0, 0)
+    lcd.write_string(" " * LCD_COLS)
+    lcd.cursor_pos = (0, 0)
+    lcd.write_string(line1[:LCD_COLS])
+    if line2:
+        lcd.cursor_pos = (1, 0)
+        lcd.write_string(" " * LCD_COLS)
+        lcd.cursor_pos = (1, 0)
+        lcd.write_string(line2[:LCD_COLS])
+
 async def invia_comando_camera():
     global timer_attivo
     print(f"📸 TRIGGER! Scatto in corso...")
-    
-    lcd.clear()
-    lcd.write_string("Trigger! Foto...")
+    await lcd_update("Trigger! Foto...", f"IP: {CAMERA_IP}")
 
     url = f"http://{CAMERA_IP}/capture"
     try:
@@ -36,22 +47,13 @@ async def invia_comando_camera():
             response = await client.get(url, timeout=10.0)
             if response.status_code == 200:
                 print("✅ Foto aggiornata con UN SOLO trigger!")
-                lcd.clear()
-                lcd.write_string(f"Foto OK!")
-                lcd.cursor_pos = (1, 0)
-                lcd.write_string(f"IP: {CAMERA_IP}")
+                await lcd_update("Foto OK!", f"IP: {CAMERA_IP}")
             else:
                 print(f"⚠️ Problema ESP: {response.status_code}")
-                lcd.clear()
-                lcd.write_string("Errore ESP")
-                lcd.cursor_pos = (1, 0)
-                lcd.write_string(f"IP: {CAMERA_IP}")
+                await lcd_update("Errore ESP", f"IP: {CAMERA_IP}")
     except Exception as e:
         print(f"❌ Errore rete: {e}")
-        lcd.clear()
-        lcd.write_string("Errore rete")
-        lcd.cursor_pos = (1, 0)
-        lcd.write_string(f"IP: {CAMERA_IP}")
+        await lcd_update("Errore rete", f"IP: {CAMERA_IP}")
 
     await asyncio.sleep(3)
     timer_attivo = False
@@ -60,11 +62,12 @@ def notification_handler(sender, data):
     global timer_attivo, ultima_distanza
     try:
         distanza = float(data.decode().strip())
-        # Mostra distanza e IP sul LCD
-        lcd.clear()
-        lcd.write_string(f"Distanza: {distanza:.1f}cm")
-        lcd.cursor_pos = (1, 0)
-        lcd.write_string(f"IP: {CAMERA_IP}")
+
+        # Aggiorna LCD in modo thread-safe
+        asyncio.run_coroutine_threadsafe(
+            lcd_update(f"Distanza: {distanza:.1f}cm", f"IP: {CAMERA_IP}"),
+            asyncio.get_event_loop()
+        )
 
         if ultima_distanza is not None and not timer_attivo:
             if ultima_distanza > SOGLIA_DISTANZA and distanza < SOGLIA_DISTANZA:
@@ -76,23 +79,15 @@ def notification_handler(sender, data):
 
 async def main():
     print(f"🔍 Connessione a {MAC_ADDRESS}...")
-    lcd.clear()
-    lcd.write_string("Connetto BLE...")
+    await lcd_update("Connetto BLE...", f"IP: {CAMERA_IP}")
     try:
         async with BleakClient(MAC_ADDRESS) as client:
             print("✅ Sensore Pronto.")
-            lcd.clear()
-            lcd.write_string("Sensore pronto!")
-            lcd.cursor_pos = (1, 0)
-            lcd.write_string(f"IP: {CAMERA_IP}")
+            await lcd_update("Sensore pronto!", f"IP: {CAMERA_IP}")
             await client.start_notify(CHAR_UUID, notification_handler)
             while True:
                 await asyncio.sleep(1)
     except Exception as e:
         print(f"💥 Errore: {e}")
-        lcd.clear()
-        lcd.write_string("Errore BLE!")
-        lcd.cursor_pos = (1, 0)
-        lcd.write_string(f"IP: {CAMERA_IP}")
+        await lcd_update("Errore BLE!", f"IP: {CAMERA_IP}")
         time.sleep(2)
-        lcd.clear()
